@@ -622,4 +622,282 @@ name.endsWith(".mkv", true) ||
 name.endsWith(".mov", true)
 if (isVideo && !name.startsWith(".")) {
 val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childId)
-list.add(Sho
+list.add(ShortVideo(fileUri, name, lastMod, likedSet.contains(name)))
+}
+}
+}
+list
+}
+allVideos.clear()
+allVideos.addAll(loaded)
+applySortAndFilter()
+if (allVideos.isEmpty()) {
+emptySetupBox.visibility = View.VISIBLE
+}
+}
+}
+private fun applySortAndFilter() {
+val filtered = allVideos.filter { v ->
+if (currentSort == "liked" && !v.isLiked) return@filter false
+if (searchQuery.isNotEmpty() && !v.name.contains(searchQuery, ignoreCase = true)) return@filter false
+true
+}.toMutableList()
+when (currentSort) {
+"date_asc" -> filtered.sortBy { it.lastModified }
+"name_asc" -> filtered.sortBy { it.name.lowercase(Locale.getDefault()) }
+else -> filtered.sortByDescending { it.lastModified } // Default: Newest Saved first
+}
+displayedVideos.clear()
+displayedVideos.addAll(filtered)
+countBadge.text = "${displayedVideos.size}"
+gridAdapter.notifyDataSetChanged()
+pagerAdapter.notifyDataSetChanged()
+}
+// Extracts & caches the 0.5s (500,000 microsecond) cosplayer frame
+private fun loadOrExtractThumbnail(video: ShortVideo, targetView: ImageView) {
+val key = video.name
+targetView.tag = key
+memCache.get(key)?.let {
+targetView.setImageBitmap(it)
+return
+}
+targetView.setImageDrawable(null)
+scope.launch {
+val bmp = withContext(Dispatchers.IO) {
+val cacheFile = File(cacheDir, "cover_05s_${key.hashCode()}.jpg")
+if (cacheFile.exists()) {
+BitmapFactory.decodeFile(cacheFile.absolutePath)
+} else {
+val retriever = MediaMetadataRetriever()
+try {
+retriever.setDataSource(this@MainActivity, video.uri)
+// Grab frame at 0.5s (500,000 microseconds) where cosplayer intro is
+val raw = retriever.getFrameAtTime(500_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+?: retriever.frameAtTime
+if (raw != null) {
+FileOutputStream(cacheFile).use { out ->
+raw.compress(Bitmap.CompressFormat.JPEG, 80, out)
+}
+}
+raw
+} catch (: Exception) {
+null
+} finally {
+try { retriever.release() } catch (: Exception) {}
+}
+}
+}
+if (bmp != null) {
+memCache.put(key, bmp)
+if (targetView.tag == key) {
+targetView.setImageBitmap(bmp)
+}
+}
+}
+}
+private fun lockCurrentFrameAsCover() {
+val pos = viewPager.currentItem
+val video = displayedVideos.getOrNull(pos) ?: return
+val player = exoPlayer ?: return
+val currentUs = player.currentPosition.coerceAtLeast(0L) * 1000L
+scope.launch {
+val bmp = withContext(Dispatchers.IO) {
+val retriever = MediaMetadataRetriever()
+try {
+retriever.setDataSource(this@MainActivity, video.uri)
+val frame = retriever.getFrameAtTime(currentUs, MediaMetadataRetriever.OPTION_CLOSEST)
+if (frame != null) {
+val cacheFile = File(cacheDir, "cover_05s_${video.name.hashCode()}.jpg")
+FileOutputStream(cacheFile).use { out ->
+frame.compress(Bitmap.CompressFormat.JPEG, 85, out)
+}
+}
+frame
+} catch (: Exception) {
+null
+} finally {
+try { retriever.release() } catch (: Exception) {}
+}
+}
+if (bmp != null) {
+memCache.put(video.name, bmp)
+gridAdapter.notifyItemChanged(pos)
+Toast.makeText(this@MainActivity, "Locked current frame as thumbnail!", Toast.LENGTH_SHORT).show()
+}
+}
+}
+private fun toggleLikeCurrentVideo() {
+val pos = viewPager.currentItem
+val video = displayedVideos.getOrNull(pos) ?: return
+video.isLiked = !video.isLiked
+likeBtnText.text = if (video.isLiked) "❤️" else "🤍"
+val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+val set = (prefs.getStringSet(KEY_LIKED_SET, emptySet()) ?: emptySet()).toMutableSet()
+if (video.isLiked) set.add(video.name) else set.remove(video.name)
+prefs.edit().putStringSet(KEY_LIKED_SET, set).apply()
+gridAdapter.notifyItemChanged(pos)
+}
+private fun openShortsPlayer(startIndex: Int) {
+if (displayedVideos.isEmpty()) return
+playerOverlay.visibility = View.VISIBLE
+if (exoPlayer == null) {
+exoPlayer = ExoPlayer.Builder(this).build().apply {
+repeatMode = Player.REPEAT_MODE_ONE
+}
+}
+viewPager.setCurrentItem(startIndex, false)
+viewPager.post { playShortAt(startIndex) }
+startProgressTicker()
+}
+private fun closeShortsPlayer() {
+progressHandler.removeCallbacksAndMessages(null)
+exoPlayer?.pause()
+activePlayerView?.player = null
+playerOverlay.visibility = View.GONE
+}
+private fun playShortAt(position: Int) {
+val video = displayedVideos.getOrNull(position) ?: return
+val player = exoPlayer ?: return
+playerTitleText.text = video.name.substringBeforeLast(".")
+val df = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+playerDateText.text = "Saved ${df.format(Date(video.lastModified))}"
+likeBtnText.text = if (video.isLiked) "❤️" else "🤍"
+val rv = viewPager.getChildAt(0) as? RecyclerView
+val holder = rv?.findViewHolderForAdapterPosition(position) as? ShortsPagerAdapter.PageHolder
+if (holder != null) {
+activePlayerView?.player = null
+activePlayerView = holder.playerView
+holder.playerView.player = player
+}
+player.setMediaItem(MediaItem.fromUri(video.uri))
+player.prepare()
+if (skipIntroMode) {
+player.seekTo(1800L) // Jump straight to JDM car beat drop
+} else {
+player.seekTo(0L)
+}
+player.playWhenReady = true
+}
+private fun startProgressTicker() {
+progressHandler.removeCallbacksAndMessages(null)
+progressHandler.post(object : Runnable {
+override fun run() {
+val player = exoPlayer
+if (player != null && !isUserScrubbing && playerOverlay.visibility == View.VISIBLE) {
+val dur = player.duration.coerceAtLeast(1L)
+val cur = player.currentPosition.coerceAtLeast(0L)
+if (skipIntroMode && cur < 1650L && dur > 2500L) {
+player.seekTo(1800L)
+}
+bottomScrubber.progress = ((cur * 1000L) / dur).toInt().coerceIn(0, 1000)
+timeReadout.text = "{formatMs(cur)} /{formatMs(dur)}"
+}
+progressHandler.postDelayed(this, 100L)
+}
+})
+}
+private fun formatMs(ms: Long): String {
+val totalSec = (ms / 1000L).coerceAtLeast(0L)
+val m = totalSec / 60L
+val s = totalSec % 60L
+return String.format(Locale.US, "%d:%02d", m, s)
+}
+override fun onDestroy() {
+super.onDestroy()
+progressHandler.removeCallbacksAndMessages(null)
+exoPlayer?.release()
+scope.cancel()
+}
+// 3-Column 9:16 Grid Adapter
+inner class ShortsGridAdapter : RecyclerView.Adapter<ShortsGridAdapter.GridHolder>() {
+inner class GridHolder(
+val container: FrameLayout,
+val image: ImageView,
+val dateLabel: TextView
+) : RecyclerView.ViewHolder(container)
+override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): GridHolder {
+val screenW = resources.displayMetrics.widthPixels
+val cellW = screenW / 3
+val cellH = (cellW * 16) / 9
+val frame = FrameLayout(parent.context).apply {
+layoutParams = ViewGroup.MarginLayoutParams(cellW, cellH).apply {
+setMargins(dp(1), dp(1), dp(1), dp(1))
+}
+setBackgroundColor(Color.parseColor("#18181B"))
+}
+val img = ImageView(parent.context).apply {
+scaleType = ImageView.ScaleType.CENTER_CROP
+layoutParams = FrameLayout.LayoutParams(
+ViewGroup.LayoutParams.MATCH_PARENT,
+ViewGroup.LayoutParams.MATCH_PARENT
+)
+}
+val dateTxt = TextView(parent.context).apply {
+setTextColor(Color.WHITE)
+textSize = 10f
+setPadding(dp(6), dp(2), dp(6), dp(4))
+setBackgroundColor(Color.parseColor("#66000000"))
+layoutParams = FrameLayout.LayoutParams(
+ViewGroup.LayoutParams.MATCH_PARENT,
+ViewGroup.LayoutParams.WRAP_CONTENT,
+Gravity.BOTTOM
+)
+}
+frame.addView(img)
+frame.addView(dateTxt)
+return GridHolder(frame, img, dateTxt)
+}
+override fun onBindViewHolder(holder: GridHolder, position: Int) {
+val item = displayedVideos[position]
+val df = SimpleDateFormat("MMM d", Locale.getDefault())
+holder.dateLabel.text = df.format(Date(item.lastModified)) + (if (item.isLiked) " ❤️" else "")
+loadOrExtractThumbnail(item, holder.image)
+holder.container.setOnClickListener { openShortsPlayer(position) }
+}
+override fun getItemCount(): Int = displayedVideos.size
+}
+// Vertical Swipe Pager Adapter
+inner class ShortsPagerAdapter : RecyclerView.Adapter<ShortsPagerAdapter.PageHolder>() {
+inner class PageHolder(val frame: FrameLayout, val playerView: PlayerView) :
+RecyclerView.ViewHolder(frame)
+override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): PageHolder {
+val frame = FrameLayout(parent.context).apply {
+layoutParams = ViewGroup.LayoutParams(
+ViewGroup.LayoutParams.MATCH_PARENT,
+ViewGroup.LayoutParams.MATCH_PARENT
+)
+}
+frame.addView(pv)
+frame.setOnClickListener {
+val p = exoPlayer ?: return@setOnClickListener
+if (p.isPlaying) p.pause() else p.play()
+}
+return PageHolder(frame, pv)
+}
+override fun onBindViewHolder(holder: PageHolder, position: Int) {
+if (position == viewPager.currentItem && exoPlayer != null) {
+activePlayerView?.player = null
+activePlayerView = holder.playerView
+holder.playerView.player = exoPlayer
+}
+}
+override fun getItemCount(): Int = displayedVideos.size
+}
+}
+EOF_KT
+- name: Set up JDK 17
+uses: actions/setup-java@v4
+with:
+java-version: '17'
+distribution: 'temurin'
+- name: Setup Gradle
+uses: gradle/actions/setup-gradle@v3
+with:
+gradle-version: '8.7'
+- name: Compile Android APK
+run: gradle assembleDebug
+- name: Upload Ready-to-Install APK
+uses: actions/upload-artifact@v4
+with:
+name: 7249-Shorts-Android-APK
+path: app/build/outputs/apk/debug/app-debug.apk
