@@ -25,18 +25,20 @@ steps:
                 google()
                 mavenCentral()
             }
-        }
+                    }
         EOF_SETTINGS
-dependencyResolutionManagement {
-repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-repositories {
-google()
-mavenCentral()
-}
-}
-rootProject.name = "JDM7249Shorts"
-include ':app'
-EOF_SETTINGS
+        cat << 'EOF_SETTINGS' > settings.gradle
+        dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+            repositories {
+                google()
+                mavenCentral()
+            }
+        }
+        rootProject.name = "JDM7249Shorts"
+        include ':app'
+        EOF_SETTINGS
+        
 cat << 'EOF_ROOT_GRADLE' > build.gradle
 plugins {
 id 'com.android.application' version '8.3.0' apply false
