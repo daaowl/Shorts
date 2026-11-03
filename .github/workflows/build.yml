@@ -1,0 +1,625 @@
+name: Build 7249 Shorts APK
+on:
+push:
+workflow_dispatch:
+jobs:
+build-apk:
+runs-on: ubuntu-latest
+steps:
+- name: Generate Android Project Source
+run: |
+mkdir -p app/src/main/java/com/jdm7249/vault
+cat << 'EOF_SETTINGS' > settings.gradle
+pluginManagement {
+repositories {
+google()
+mavenCentral()
+gradlePluginPortal()
+}
+}
+dependencyResolutionManagement {
+repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+repositories {
+google()
+mavenCentral()
+}
+}
+rootProject.name = "JDM7249Shorts"
+include ':app'
+EOF_SETTINGS
+cat << 'EOF_ROOT_GRADLE' > build.gradle
+plugins {
+id 'com.android.application' version '8.3.0' apply false
+id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+}
+EOF_ROOT_GRADLE
+cat << 'EOF_PROPS' > gradle.properties
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+kotlin.code.style=official
+android.nonTransitiveRClass=true
+EOF_PROPS
+cat << 'EOF_APP_GRADLE' > app/build.gradle
+plugins {
+id 'com.android.application'
+id 'org.jetbrains.kotlin.android'
+}
+android {
+namespace 'com.jdm7249.vault'
+compileSdk 34
+defaultConfig {
+applicationId "com.jdm7249.vault"
+minSdk 26
+targetSdk 34
+versionCode 1
+versionName "1.0"
+}
+buildTypes {
+debug {
+minifyEnabled false
+}
+}
+compileOptions {
+sourceCompatibility JavaVersion.VERSION_17
+targetCompatibility JavaVersion.VERSION_17
+}
+kotlinOptions {
+jvmTarget = '17'
+}
+}
+dependencies {
+implementation 'androidx.core:core-ktx:1.12.0'
+implementation 'androidx.appcompat:appcompat:1.6.1'
+implementation 'com.google.android.material:material:1.11.0'
+implementation 'androidx.recyclerview:recyclerview:1.3.2'
+implementation 'androidx.viewpager2:viewpager2:1.0.0'
+implementation 'androidx.documentfile:documentfile:1.0.1'
+implementation 'androidx.media3:media3-exoplayer:1.3.0'
+implementation 'androidx.media3:media3-ui:1.3.0'
+implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+}
+EOF_APP_GRADLE
+cat << 'EOF_MANIFEST' > app/src/main/AndroidManifest.xml
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+<uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+<application
+android:allowBackup="true"
+android:label="7249 Shorts"
+android:supportsRtl="true"
+android:theme="@style/Theme.Material3.Dark.NoActionBar">
+<activity
+android:name=".MainActivity"
+android:exported="true"
+android:configChanges="orientation|screenSize|keyboardHidden"
+android:screenOrientation="portrait">
+<intent-filter>
+<action android:name="android.intent.action.MAIN" />
+<category android:name="android.intent.category.LAUNCHER" />
+</intent-filter>
+</activity>
+</application>
+</manifest>
+EOF_MANIFEST
+cat << 'EOF_KT' > app/src/main/java/com/jdm7249/vault/MainActivity.kt
+package com.jdm7249.vault
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.provider.DocumentsContract
+import android.text.Editable
+import android.text.TextUtils
+import android.text.TextWatcher
+import android.util.LruCache
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.*
+import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AppCompatActivity
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import androidx.viewpager2.widget.ViewPager2
+import kotlinx.coroutines.*
+import java.io.File
+import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.*
+data class ShortVideo(
+val uri: Uri,
+val name: String,
+val lastModified: Long,
+var isLiked: Boolean = false
+)
+class MainActivity : AppCompatActivity() {
+private val PREFS = "jdm_7249_prefs"
+private val KEY_FOLDER_URI = "saved_nomedia_folder_uri"
+private val KEY_LIKED_SET = "liked_videos_set"
+private val KEY_SKIP_INTRO = "skip_intro_mode"
+private val REQ_OPEN_TREE = 7249
+private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+private val allVideos = mutableListOf<ShortVideo>()
+private val displayedVideos = mutableListOf<ShortVideo>()
+private var currentSort = "date_desc" // date_desc, date_asc, liked, name_asc
+private var searchQuery = ""
+private var skipIntroMode = false
+private lateinit var rootFrame: FrameLayout
+private lateinit var gridContainer: LinearLayout
+private lateinit var countBadge: TextView
+private lateinit var gridRecycler: RecyclerView
+private lateinit var gridAdapter: ShortsGridAdapter
+private lateinit var emptySetupBox: LinearLayout
+// Fullscreen Shorts Player Overlay
+private lateinit var playerOverlay: FrameLayout
+private lateinit var viewPager: ViewPager2
+private lateinit var pagerAdapter: ShortsPagerAdapter
+private var exoPlayer: ExoPlayer? = null
+private var activePlayerView: PlayerView? = null
+private lateinit var bottomScrubber: SeekBar
+private lateinit var timeReadout: TextView
+private lateinit var playerTitleText: TextView
+private lateinit var playerDateText: TextView
+private lateinit var likeBtnText: TextView
+private lateinit var skipIntroBtn: TextView
+private val progressHandler = Handler(Looper.getMainLooper())
+private var isUserScrubbing = false
+private val memCache = object : LruCache<String, Bitmap>(60) {}
+override fun onCreate(savedInstanceState: Bundle?) {
+super.onCreate(savedInstanceState)
+window.statusBarColor = Color.parseColor("#0A0A0A")
+window.navigationBarColor = Color.parseColor("#0A0A0A")
+val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+skipIntroMode = prefs.getBoolean(KEY_SKIP_INTRO, false)
+buildModernUI()
+onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+override fun handleOnBackPressed() {
+if (playerOverlay.visibility == View.VISIBLE) {
+closeShortsPlayer()
+} else {
+isEnabled = false
+onBackPressedDispatcher.onBackPressed()
+}
+}
+})
+val savedUriStr = prefs.getString(KEY_FOLDER_URI, null)
+if (savedUriStr != null) {
+val uri = Uri.parse(savedUriStr)
+loadFolderVideosFast(uri)
+} else {
+emptySetupBox.visibility = View.VISIBLE
+}
+}
+private fun dp(v: Int): Int =
+TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
+private fun pillBg(colorHex: String, radiusDp: Int = 20): GradientDrawable =
+GradientDrawable().apply {
+setColor(Color.parseColor(colorHex))
+cornerRadius = dp(radiusDp).toFloat()
+}
+private fun buildModernUI() {
+rootFrame = FrameLayout(this).apply {
+setBackgroundColor(Color.parseColor("#0A0A0A"))
+}
+gridContainer = LinearLayout(this).apply {
+orientation = LinearLayout.VERTICAL
+layoutParams = FrameLayout.LayoutParams(
+ViewGroup.LayoutParams.MATCH_PARENT,
+ViewGroup.LayoutParams.MATCH_PARENT
+)
+}
+// Top App Bar
+val topBar = LinearLayout(this).apply {
+orientation = LinearLayout.HORIZONTAL
+gravity = Gravity.CENTER_VERTICAL
+setPadding(dp(14), dp(12), dp(14), dp(8))
+}
+val logoBadge = TextView(this).apply {
+text = "▶"
+setTextColor(Color.WHITE)
+textSize = 13f
+gravity = Gravity.CENTER
+background = pillBg("#FF0033", 8)
+layoutParams = LinearLayout.LayoutParams(dp(28), dp(28)).apply { rightMargin = dp(8) }
+}
+val titleView = TextView(this).apply {
+text = "7249 Shorts"
+setTextColor(Color.WHITE)
+textSize = 18f
+setTypeface(typeface, Typeface.BOLD)
+}
+countBadge = TextView(this).apply {
+text = "0"
+setTextColor(Color.parseColor("#D4D4D8"))
+textSize = 12f
+setPadding(dp(8), dp(2), dp(8), dp(2))
+background = pillBg("#27272A", 12)
+layoutParams = LinearLayout.LayoutParams(
+ViewGroup.LayoutParams.WRAP_CONTENT,
+ViewGroup.LayoutParams.WRAP_CONTENT
+).apply { leftMargin = dp(8) }
+}
+val spacer = View(this).apply {
+layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+}
+val changeFolderBtn = TextView(this).apply {
+text = "Folder"
+setTextColor(Color.WHITE)
+textSize = 12f
+setTypeface(typeface, Typeface.BOLD)
+setPadding(dp(12), dp(6), dp(12), dp(6))
+background = pillBg("#27272A", 16)
+setOnClickListener { promptSelectNomediaFolder() }
+}
+topBar.addView(logoBadge)
+topBar.addView(titleView)
+topBar.addView(countBadge)
+topBar.addView(spacer)
+topBar.addView(changeFolderBtn)
+gridContainer.addView(topBar)
+// Search Input
+val searchInput = EditText(this).apply {
+hint = "Search filename..."
+setHintTextColor(Color.parseColor("#71717A"))
+setTextColor(Color.WHITE)
+textSize = 13f
+setSingleLine(true)
+setPadding(dp(14), dp(8), dp(14), dp(8))
+background = pillBg("#18181B", 18)
+layoutParams = LinearLayout.LayoutParams(
+ViewGroup.LayoutParams.MATCH_PARENT,
+ViewGroup.LayoutParams.WRAP_CONTENT
+).apply {
+setMargins(dp(14), dp(2), dp(14), dp(8))
+}
+addTextChangedListener(object : TextWatcher {
+override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+searchQuery = s?.toString()?.trim() ?: ""
+applySortAndFilter()
+}
+override fun afterTextChanged(s: Editable?) {}
+})
+}
+gridContainer.addView(searchInput)
+// Sort Chips Row (Newest Saved, Oldest Saved, Liked, A-Z)
+val sortRow = LinearLayout(this).apply {
+orientation = LinearLayout.HORIZONTAL
+setPadding(dp(14), 0, dp(14), dp(10))
+}
+val sortOptions = listOf(
+"date_desc" to "Newest Saved",
+"date_asc" to "Oldest Saved",
+"liked" to "Liked ♥",
+"name_asc" to "A–Z"
+)
+val sortButtons = mutableMapOf<String, TextView>()
+fun refreshSortPills() {
+for ((key, btn) in sortButtons) {
+if (key == currentSort) {
+btn.setTextColor(Color.BLACK)
+btn.background = pillBg("#FFFFFF", 16)
+} else {
+btn.setTextColor(Color.parseColor("#D4D4D8"))
+btn.background = pillBg("#1F1F23", 16)
+}
+}
+}
+for ((key, label) in sortOptions) {
+val chip = TextView(this).apply {
+text = label
+textSize = 12f
+setTypeface(typeface, Typeface.BOLD)
+setPadding(dp(12), dp(6), dp(12), dp(6))
+layoutParams = LinearLayout.LayoutParams(
+ViewGroup.LayoutParams.WRAP_CONTENT,
+ViewGroup.LayoutParams.WRAP_CONTENT
+).apply { rightMargin = dp(6) }
+setOnClickListener {
+currentSort = key
+refreshSortPills()
+applySortAndFilter()
+}
+}
+sortButtons[key] = chip
+sortRow.addView(chip)
+}
+refreshSortPills()
+gridContainer.addView(sortRow)
+// One-Time Setup Box (Only shown before folder is linked)
+emptySetupBox = LinearLayout(this).apply {
+orientation = LinearLayout.VERTICAL
+gravity = Gravity.CENTER
+visibility = View.GONE
+setPadding(dp(24), dp(48), dp(24), dp(48))
+}
+val setupTitle = TextView(this).apply {
+text = "Link Your .nomedia Folder Once"
+setTextColor(Color.WHITE)
+textSize = 18f
+setTypeface(typeface, Typeface.BOLD)
+gravity = Gravity.CENTER
+}
+val setupSub = TextView(this).apply {
+text = "Pick your hidden folder once. All 560 Shorts will load automatically every time you open the app, sorted by Date Saved with 0.5s cosplayer covers."
+setTextColor(Color.parseColor("#A1A1AA"))
+textSize = 13f
+gravity = Gravity.CENTER
+setPadding(0, dp(8), 0, dp(18))
+}
+val setupBtn = TextView(this).apply {
+text = "Select .nomedia Folder"
+setTextColor(Color.WHITE)
+textSize = 14f
+setTypeface(typeface, Typeface.BOLD)
+setPadding(dp(22), dp(12), dp(22), dp(12))
+background = pillBg("#FF0033", 24)
+setOnClickListener { promptSelectNomediaFolder() }
+}
+emptySetupBox.addView(setupTitle)
+emptySetupBox.addView(setupSub)
+emptySetupBox.addView(setupBtn)
+gridContainer.addView(emptySetupBox)
+// 3-Column 9:16 YouTube Shorts Grid
+gridRecycler = RecyclerView(this).apply {
+layoutManager = GridLayoutManager(this@MainActivity, 3)
+layoutParams = LinearLayout.LayoutParams(
+ViewGroup.LayoutParams.MATCH_PARENT,
+0,
+1f
+)
+}
+gridAdapter = ShortsGridAdapter()
+gridRecycler.adapter = gridAdapter
+gridContainer.addView(gridRecycler)
+rootFrame.addView(gridContainer)
+// Fullscreen Vertical Swipe Shorts Player Overlay
+buildPlayerOverlay()
+rootFrame.addView(playerOverlay)
+setContentView(rootFrame)
+}
+private fun buildPlayerOverlay() {
+playerOverlay = FrameLayout(this).apply {
+visibility = View.GONE
+setBackgroundColor(Color.BLACK)
+layoutParams = FrameLayout.LayoutParams(
+ViewGroup.LayoutParams.MATCH_PARENT,
+ViewGroup.LayoutParams.MATCH_PARENT
+)
+}
+viewPager = ViewPager2(this).apply {
+orientation = ViewPager2.ORIENTATION_VERTICAL
+layoutParams = FrameLayout.LayoutParams(
+ViewGroup.LayoutParams.MATCH_PARENT,
+ViewGroup.LayoutParams.MATCH_PARENT
+)
+}
+pagerAdapter = ShortsPagerAdapter()
+viewPager.adapter = pagerAdapter
+viewPager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
+override fun onPageSelected(position: Int) {
+super.onPageSelected(position)
+playShortAt(position)
+}
+})
+playerOverlay.addView(viewPager)
+// Top Bar Inside Player (Back + Skip Intro Toggle)
+val topPlayerBar = LinearLayout(this).apply {
+orientation = LinearLayout.HORIZONTAL
+gravity = Gravity.CENTER_VERTICAL
+setPadding(dp(12), dp(16), dp(12), dp(12))
+layoutParams = FrameLayout.LayoutParams(
+ViewGroup.LayoutParams.MATCH_PARENT,
+ViewGroup.LayoutParams.WRAP_CONTENT,
+Gravity.TOP
+)
+}
+val backBtn = TextView(this).apply {
+text = "←"
+setTextColor(Color.WHITE)
+textSize = 20f
+gravity = Gravity.CENTER
+background = pillBg("#80000000", 20)
+layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+setOnClickListener { closeShortsPlayer() }
+}
+val topSpace = View(this).apply {
+layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+}
+skipIntroBtn = TextView(this).apply {
+text = if (skipIntroMode) "Car Drop Only: ON" else "Car Drop Only: OFF"
+setTextColor(Color.WHITE)
+textSize = 11f
+setTypeface(typeface, Typeface.BOLD)
+setPadding(dp(12), dp(6), dp(12), dp(6))
+background = pillBg(if (skipIntroMode) "#CCFF0033" else "#80000000", 16)
+setOnClickListener {
+skipIntroMode = !skipIntroMode
+getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+.edit()
+.putBoolean(KEY_SKIP_INTRO, skipIntroMode)
+.apply()
+skipIntroBtn.text = if (skipIntroMode) "Car Drop Only: ON" else "Car Drop Only: OFF"
+skipIntroBtn.background = pillBg(if (skipIntroMode) "#CCFF0033" else "#80000000", 16)
+}
+}
+topPlayerBar.addView(backBtn)
+topPlayerBar.addView(topSpace)
+topPlayerBar.addView(skipIntroBtn)
+playerOverlay.addView(topPlayerBar)
+// Right Side Vertical Action Rail (Like + Set Current Frame as Cover)
+val rightRail = LinearLayout(this).apply {
+orientation = LinearLayout.VERTICAL
+gravity = Gravity.CENTER_HORIZONTAL
+layoutParams = FrameLayout.LayoutParams(
+ViewGroup.LayoutParams.WRAP_CONTENT,
+ViewGroup.LayoutParams.WRAP_CONTENT,
+Gravity.BOTTOM or Gravity.END
+).apply {
+rightMargin = dp(12)
+bottomMargin = dp(90)
+}
+}
+likeBtnText = TextView(this).apply {
+text = "🤍"
+textSize = 22f
+gravity = Gravity.CENTER
+background = pillBg("#80000000", 24)
+layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply { bottomMargin = dp(16) }
+setOnClickListener { toggleLikeCurrentVideo() }
+}
+val setCoverBtn = TextView(this).apply {
+text = "📸"
+textSize = 20f
+gravity = Gravity.CENTER
+background = pillBg("#80000000", 24)
+layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+setOnClickListener { lockCurrentFrameAsCover() }
+}
+val setCoverLabel = TextView(this).apply {
+text = "Cover"
+setTextColor(Color.WHITE)
+textSize = 10f
+gravity = Gravity.CENTER
+setPadding(0, dp(2), 0, 0)
+}
+rightRail.addView(likeBtnText)
+rightRail.addView(setCoverBtn)
+rightRail.addView(setCoverLabel)
+playerOverlay.addView(rightRail)
+// Bottom Controls (Title + Saved Date + Red YouTube Scrubber Slider)
+val bottomBox = LinearLayout(this).apply {
+orientation = LinearLayout.VERTICAL
+setPadding(dp(14), dp(16), dp(14), dp(10))
+setBackgroundColor(Color.parseColor("#99000000"))
+layoutParams = FrameLayout.LayoutParams(
+ViewGroup.LayoutParams.MATCH_PARENT,
+ViewGroup.LayoutParams.WRAP_CONTENT,
+Gravity.BOTTOM
+)
+}
+playerDateText = TextView(this).apply {
+text = ""
+setTextColor(Color.parseColor("#A1A1AA"))
+textSize = 11f
+}
+playerTitleText = TextView(this).apply {
+text = ""
+setTextColor(Color.WHITE)
+textSize = 14f
+setTypeface(typeface, Typeface.BOLD)
+maxLines = 1
+ellipsize = TextUtils.TruncateAt.END
+setPadding(0, dp(2), dp(60), dp(6))
+}
+val sliderRow = LinearLayout(this).apply {
+orientation = LinearLayout.HORIZONTAL
+gravity = Gravity.CENTER_VERTICAL
+}
+bottomScrubber = SeekBar(this).apply {
+max = 1000
+layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+if (fromUser) {
+val player = exoPlayer ?: return
+val dur = player.duration.coerceAtLeast(1L)
+val targetMs = (dur * progress) / 1000L
+player.seekTo(targetMs)
+timeReadout.text = "{formatMs(targetMs)} /{formatMs(dur)}"
+}
+}
+override fun onStartTrackingTouch(seekBar: SeekBar?) { isUserScrubbing = true }
+override fun onStopTrackingTouch(seekBar: SeekBar?) { isUserScrubbing = false }
+})
+}
+timeReadout = TextView(this).apply {
+text = "0:00 / 0:00"
+setTextColor(Color.parseColor("#E4E4E7"))
+textSize = 11f
+setPadding(dp(6), 0, 0, 0)
+}
+sliderRow.addView(bottomScrubber)
+sliderRow.addView(timeReadout)
+bottomBox.addView(playerDateText)
+bottomBox.addView(playerTitleText)
+bottomBox.addView(sliderRow)
+playerOverlay.addView(bottomBox)
+}
+private fun promptSelectNomediaFolder() {
+val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+addFlags(
+Intent.FLAG_GRANT_READ_URI_PERMISSION or
+Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+)
+}
+startActivityForResult(intent, REQ_OPEN_TREE)
+}
+override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+super.onActivityResult(requestCode, resultCode, data)
+if (requestCode == REQ_OPEN_TREE && resultCode == Activity.RESULT_OK) {
+val treeUri = data?.data ?: return
+try {
+contentResolver.takePersistableUriPermission(
+treeUri,
+Intent.FLAG_GRANT_READ_URI_PERMISSION
+)
+} catch (_: Exception) {}
+getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+.edit()
+.putString(KEY_FOLDER_URI, treeUri.toString())
+.apply()
+loadFolderVideosFast(treeUri)
+}
+}
+// Fast ContentResolver query that reads 560+ video entries & saved dates in <100ms
+private fun loadFolderVideosFast(treeUri: Uri) {
+emptySetupBox.visibility = View.GONE
+scope.launch {
+val likedSet = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+.getStringSet(KEY_LIKED_SET, emptySet()) ?: emptySet()
+val loaded = withContext(Dispatchers.IO) {
+val list = mutableListOf<ShortVideo>()
+val docId = DocumentsContract.getTreeDocumentId(treeUri)
+val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
+val projection = arrayOf(
+DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+DocumentsContract.Document.COLUMN_MIME_TYPE,
+DocumentsContract.Document.COLUMN_LAST_MODIFIED
+)
+contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+val mimeCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+val dateCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+while (cursor.moveToNext()) {
+val childId = cursor.getString(idCol) ?: continue
+val name = cursor.getString(nameCol) ?: continue
+val mime = cursor.getString(mimeCol) ?: ""
+val lastMod = if (cursor.isNull(dateCol)) 0L else cursor.getLong(dateCol)
+val isVideo = mime.startsWith("video/") ||
+name.endsWith(".mp4", true) ||
+name.endsWith(".webm", true) ||
+name.endsWith(".mkv", true) ||
+name.endsWith(".mov", true)
+if (isVideo && !name.startsWith(".")) {
+val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childId)
+list.add(Sho
