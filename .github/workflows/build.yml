@@ -5,18 +5,28 @@ workflow_dispatch:
 jobs:
 build-apk:
 runs-on: ubuntu-latest
-steps:
+  stepts:
 - name: Generate Android Project Source
-run: |
-mkdir -p app/src/main/java/com/jdm7249/vault
-cat << 'EOF_SETTINGS' > settings.gradle
-pluginManagement {
-repositories {
-google()
-mavenCentral()
-gradlePluginPortal()
-}
-}
+  steps:
+    - name: Generate Android Project Source
+      run: |
+        mkdir -p app/src/main/java/com/jdm7249/vault
+        cat << 'EOF_SETTINGS' > settings.gradle
+        pluginManagement {
+            repositories {
+                google()
+                mavenCentral()
+                gradlePluginPortal()
+            }
+        }
+        dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+            repositories {
+                google()
+                mavenCentral()
+            }
+        }
+        EOF_SETTINGS
 dependencyResolutionManagement {
 repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
 repositories {
