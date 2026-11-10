@@ -266,11 +266,15 @@ private fun Hero(o: Overview, rate: Long, onSetBudget: () -> Unit) {
             Meter(o.progress, if (o.spent > o.budget) P.bad else accent, marker = o.expected)
             Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
                 Text("Spent ${Money.round(o.spent)}", style = T.small, color = P.muted, modifier = Modifier.weight(1f))
-                val ahead = o.forecast <= o.budget
-                Text(
-                    "On pace for ${Money.round(o.forecast)}", style = T.small.copy(fontWeight = FontWeight.Bold),
-                    color = if (ahead) P.good else P.bad,
-                )
+                if (o.dayIndex < 4) {
+                    Text("Day ${o.dayIndex} of ${o.daysTotal}", style = T.small, color = P.muted)
+                } else {
+                    val ahead = o.forecast <= o.budget
+                    Text(
+                        "On pace for ${Money.round(o.forecast)}", style = T.small.copy(fontWeight = FontWeight.Bold),
+                        color = if (ahead) P.good else P.bad,
+                    )
+                }
             }
             if (o.reserved > 0) {
                 Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {

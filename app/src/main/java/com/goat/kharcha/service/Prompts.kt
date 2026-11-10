@@ -219,7 +219,10 @@ class ActionReceiver : BroadcastReceiver() {
                         val t = Repo.tag(txId, cat, remember = true)
                         Prompts.cancel(app, txId)
                         val name = Repo.category(cat)?.name
-                        if (t != null && name != null) toast(app, "Filed under $name. ${t.payee} will file itself next time.")
+                        if (t != null && name != null) {
+                            val learns = Repo.settings.value.askMode == com.goat.kharcha.core.AskMode.NEW_PLACES && !t.merchant.isNullOrBlank()
+                            toast(app, if (learns) "Filed under $name. ${t.payee} will file itself next time." else "Filed under $name")
+                        }
                     }
                     MOOD -> {
                         val m = Mood.values().firstOrNull { it.name == intent.getStringExtra(EXTRA_MOOD) } ?: return@launch

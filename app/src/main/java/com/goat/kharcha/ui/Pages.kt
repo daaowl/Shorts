@@ -111,6 +111,7 @@ fun QueueScreen() {
     val txs by Repo.tx.collectAsState()
     val cats by Repo.categories.collectAsState()
     val skipped = remember { mutableStateListOf<Long>() }
+    val handled = remember { mutableStateListOf<Long>() }
     var done by remember { mutableIntStateOf(0) }
     val pending = remember(txs, skipped.toList()) {
         val all = txs.filter { it.needsTag && it.flow == Flow.OUT }.sortedByDescending { it.time }
@@ -150,6 +151,8 @@ fun QueueScreen() {
                     }
                     Text("What was it for?", style = T.title, color = P.fg, modifier = Modifier.padding(top = 20.dp, bottom = 10.dp))
                     CategoryGrid(cats.filter { !it.income }.sortedBy { it.order }, null, columns = 4, big = true) { id ->
+                        if (t.id in handled) return@CategoryGrid
+                        handled.add(t.id)
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         done++
                         Repo.scope.launch {

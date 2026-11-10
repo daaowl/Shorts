@@ -428,7 +428,7 @@ fun BoxScope.ToastHost(toaster: Toaster, bottomPadding: Dp) {
         visible = msg != null,
         enter = slideInVertically { it / 2 } + fadeIn(),
         exit = slideOutVertically { it / 2 } + fadeOut(),
-        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottomPadding).padding(horizontal = 16.dp),
+        modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = bottomPadding).padding(horizontal = 16.dp),
     ) {
         val m = shown ?: return@AnimatedVisibility
         Row(

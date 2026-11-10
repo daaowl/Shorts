@@ -58,7 +58,7 @@ object Glyphs {
         "food" to "M7 3v7a2 2 0 0 0 4 0V3M9 3v18M17 21V3c-2.2 1-3.5 4-3.5 8H17",
         "coffee" to "M5 9h11v5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5zM16 10h1.5a2.5 2.5 0 0 1 0 5H16M8.5 3.5V6M12 3.5V6",
         "cart" to "M3 4h2.5l2 11h10.5l2-8H6.5" + circle(9f, 19.5f, 1.4f) + circle(17f, 19.5f, 1.4f),
-        "car" to "M4 16l1.8-6h12.4L20 16v3H4zM7 19v2M17 19v2M4 16h16M7.5 13h.5M16 13h.5",
+        "car" to "M5 11l1.6-4.2A2 2 0 0 1 8.5 5.5h7a2 2 0 0 1 1.9 1.3L19 11M4 11h16v6H4zM6.5 17v2.5M17.5 17v2.5M7.5 14h.5M16 14h.5",
         "fuel" to "M5 20V5a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v15M4 20h11M5 10h9M14 8l3 2v7a1.5 1.5 0 0 0 3 0V9l-3-3",
         "receipt" to "M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6M9 16h3",
         "bolt" to "M13 3 5 13.5h6L10 21l8-10.5h-6z",
