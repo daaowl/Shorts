@@ -47,7 +47,9 @@ class PaymentListener : NotificationListenerService() {
         val label = appLabel(this, pkg, n)
         val texts = extractTexts(n)
         if (texts.isEmpty()) return
-        val time = sbn.postTime.takeIf { it > 0 } ?: System.currentTimeMillis()
+        // The notification's own timestamp survives re-posts after a reboot; fall back to when it was posted.
+        val posted = sbn.postTime.takeIf { it > 0 } ?: System.currentTimeMillis()
+        val time = n.`when`.takeIf { it > 0 && kotlin.math.abs(it - posted) < 24L * 60 * 60 * 1000 } ?: posted
         Detector.handle(this, pkg, label, texts, time)
     }
 
